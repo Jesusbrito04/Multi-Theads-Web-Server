@@ -88,7 +88,13 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        self.sender.as_ref().unwrap().send(job).unwrap();
+        
+        if let Some(sender) = self.sender.as_ref() {
+            if let Err(err) = sender.send(job) {
+                eprintln!("No one worker active: {}", err);
+                return;
+            }
+        }
     }
 }
 
@@ -98,7 +104,13 @@ impl Drop for ThreadPool {
         for worker in &mut self.workers {
             println!("Shutting down worker {}", worker.id);
             if let Some(thread) = worker.thread.take() {
-                thread.join().unwrap();
+                match thread.join() {
+                    Ok(thread) => thread,
+                    Err(err) => {
+                        eprintln!("The new thread could not be joined {:#?}", err);
+                        continue;
+                    } 
+                }
             }
         }
     }
@@ -116,7 +128,13 @@ impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Worker {
         let thread = thread::spawn(move || {
             loop {
-                let message = receiver.lock().unwrap().recv();
+                let message = match receiver.lock() {
+                    Ok(lock) => lock.recv(),
+                    Err(err) => {
+                        eprintln!("Avoid Mutex poisoning. {}", err);
+                        return;
+                    }
+                };
 
                 match message {
                     Ok(job) => {

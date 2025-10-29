@@ -13,17 +13,30 @@ use crate::ThreadPool;
 /// Bind a TCP Listener to the address, creates a thread pool, and enters
 /// a loop to handler incoming connections.
 pub fn start(address: &str) {
-    let listener = TcpListener::bind(address).unwrap();
+    let listener = match TcpListener::bind(address) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("Failed to bind to address: {}. Error: {}", address, err);
+            return;
+        }
+    };
+
     let pool = match ThreadPool::build(4) {
         Ok(threads) => threads,
         Err(error) => {
-            eprintln!("{:?}", error);
+            eprintln!("You cannot create a thread pool of size zero: {:?}", error);
             return;
         }
     };
 
     for stream in listener.incoming() {
-        let stream = stream.unwrap();
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!("{}", err);
+                continue;
+            }
+        };
         pool.execute(|| {
             handle_connection(stream);
         });
@@ -39,7 +52,16 @@ pub fn start(address: &str) {
 /// Simulates a delay for the `/sleep` path.
 fn handle_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&stream);
-    let request_line = buf_reader.lines().next().unwrap().unwrap();
+
+    if let Some(request_line) = buf_reader.lines().next() {
+    
+    let request_line = match request_line {
+        Ok(request) => request,
+        Err(err) => {
+            eprintln!("No text UTF-8 valid: {}", err);
+            return;
+        }
+    };
 
     let (status_line, filename) = match &request_line[..] {
         "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
@@ -49,9 +71,25 @@ fn handle_connection(mut stream: TcpStream) {
         }
         _ => ("HTTP/1.1 404 NOT FOUND", "notFound.html"),
     };
-    let contents = fs::read_to_string(filename).unwrap();
-    let length = contents.len();
 
+    let contents = match fs::read_to_string(filename) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("This file isn't avalible {}", err);
+            return;
+        }
+    };
+
+    let length = contents.len();
+    
     let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-    stream.write_all(response.as_bytes()).unwrap()
+    
+    match stream.write_all(response.as_bytes()) {
+        Ok(stream) => stream,
+        Err(err) => {
+            eprintln!("{}", err);
+            return;
+        }
+    }
+    };
 }
