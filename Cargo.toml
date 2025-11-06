@@ -3,4 +3,6 @@ name = "harbor"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[dependencies.uuid]
+version = "1.18.0"
+features = ["v4"]

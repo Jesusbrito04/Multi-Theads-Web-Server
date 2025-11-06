@@ -3,11 +3,15 @@
 //! This crate provides a `ThreadPool` that can be used to execute tasks
 //! concurrently.
 
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{Receiver, Sender, channel},
+use std::{
+    collections::HashMap,
+    thread::{self, JoinHandle},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender, channel},
+    },
 };
-use std::thread::{self, JoinHandle};
+use uuid::Uuid;
 pub mod server;
 
 /// Represents a pool of threads that can execute jobs.
@@ -19,6 +23,7 @@ pub mod server;
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: Option<Sender<Job>>,
+    jobs: Arc<Mutex<HashMap<Uuid, Job>>>,
 }
 
 #[derive(Debug)]
@@ -26,7 +31,34 @@ pub enum PoolCreateError {
     NonValueZeroAllowed,
 }
 
-type Job = Box<dyn FnOnce() + Send + 'static>;
+type JobPayload = Box<dyn FnOnce() -> Result<String, String> + Send + 'static>;
+
+#[derive(Debug, Clone)]
+
+enum JobStatus {
+    Pending,
+    Processing,
+    Completed,
+    Failed(String),
+}
+
+struct Job {
+    state: JobStatus,
+    id: Uuid,
+    result: Option<String>,
+    payload: JobPayload,
+}
+
+impl std::fmt::Debug for Job {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Job")
+            .field("state", &self.state)
+            .field("id", &self.id)
+            .field("result", &self.result)
+            .field("payload", &"FnOnce(...)") // No podemos imprimir el closure
+            .finish()
+    }
+}
 
 impl ThreadPool {
     /// Creates a New ThreadPool.
@@ -67,6 +99,7 @@ impl ThreadPool {
         Ok(ThreadPool {
             workers,
             sender: Some(sendx),
+            jobs: Arc::new(Mutex::new(HashMap::new()))
         })
     }
     /// Executes a new job in the thread pool.
@@ -85,10 +118,15 @@ impl ThreadPool {
     /// which should not happen in normal operation.
     pub fn execute<F>(&self, f: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() -> Result<String, String> + Send + 'static,
     {
-        let job = Box::new(f);
-        
+        let job = Job {
+            state: JobStatus::Pending,
+            id: Uuid::new_v4(),
+            result: None,
+            payload: Box::new(f),
+        };
+
         if let Some(sender) = self.sender.as_ref() {
             if let Err(err) = sender.send(job) {
                 eprintln!("No one worker active: {}", err);
@@ -109,7 +147,7 @@ impl Drop for ThreadPool {
                     Err(err) => {
                         eprintln!("The new thread could not be joined {:#?}", err);
                         continue;
-                    } 
+                    }
                 }
             }
         }
@@ -137,10 +175,25 @@ impl Worker {
                 };
 
                 match message {
-                    Ok(job) => {
+                    Ok(mut job) => {
                         println!("Worker {id} got a job; executing.");
+                        job.state = JobStatus::Processing;
+                        let result = (job.payload)();
 
-                        job();
+                        match result {
+                            Ok(res_str) => {
+                                job.state = JobStatus::Completed;
+                                job.result = Some(res_str.clone());
+                                println!(
+                                    "Worker {} finished job '{}' successfully with result: {}",
+                                    id, job.id, res_str
+                                );
+                            }
+                            Err(err_str) => {
+                                job.state = JobStatus::Failed(err_str.clone());
+                                println!("Worker {} failed job '{}': {}", id, job.id, err_str);
+                            }
+                        }
                     }
                     Err(_) => {
                         println!("Worker {id} disconnected; shutting down.");
@@ -186,6 +239,7 @@ mod tests {
         let (sender, receiver) = channel();
         pool.unwrap().execute(move || {
             sender.send("Job Executed").unwrap();
+            Ok("Job Executed".to_string())
         });
 
         let receive_a_message = receiver.recv().unwrap();
