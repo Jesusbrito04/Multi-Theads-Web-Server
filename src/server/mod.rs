@@ -51,7 +51,7 @@ pub fn start(address: &str) {
 /// `notFound.html` for any other path.
 ///
 /// Simulates a delay for the `/sleep` path.
-fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
+pub fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
     let buf_reader = BufReader::new(&stream);
 
     if let Some(request_line) = buf_reader.lines().next() {
