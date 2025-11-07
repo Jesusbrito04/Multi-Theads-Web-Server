@@ -37,11 +37,9 @@ pub fn start(address: &str) {
                 continue;
             }
         };
-        pool.execute(move|| {
-           match handle_connection(stream) {
-                Ok(_) => Ok("Connection handled successfully".to_string()),
-                Err(e) => Err(format!("Error handling connection: {}", e)),
-           }
+        pool.execute(move || match handle_connection(stream) {
+            Ok(_) => Ok("Connection handled successfully".to_string()),
+            Err(e) => Err(format!("Error handling connection: {}", e)),
         });
     }
 }
